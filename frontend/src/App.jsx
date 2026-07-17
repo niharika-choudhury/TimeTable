@@ -62,6 +62,7 @@ function App() {
   const [selectedDayIndex, setSelectedDayIndex] = useState(0)
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
   const [toasts, setToasts] = useState([])
+  const [gridKey, setGridKey] = useState(0)
   const [isLargeScreen, setIsLargeScreen] = useState(() => {
     return typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
   })
@@ -362,9 +363,17 @@ function App() {
         })
       }
       const result = await res.json()
-      if (res.ok && result.status === 'success') {
-        setSuccessMessage(result.message)
-        showToast('Auto-Schedule compiled successfully!', 'success')
+      const hasTimetable = result.timetable && Array.isArray(result.timetable) && result.timetable.length > 0
+
+      if (res.ok && (result.status === 'success' || hasTimetable)) {
+        setError(null)
+        if (result.status === 'error' || (result.stats && result.stats.status_name === 'UNKNOWN') || (result.message && result.message.toLowerCase().includes('fallback'))) {
+          setSuccessMessage(result.message || (result.errors ? result.errors.join('\n') : 'Timetable generated with fallback constraints.'))
+          showToast('Timetable loaded with fallback constraints.', 'info')
+        } else {
+          setSuccessMessage(result.message || 'Auto-Schedule compiled successfully!')
+          showToast('Auto-Schedule compiled successfully!', 'success')
+        }
 
         // Map backend output format to frontend sessions
         const assigned = result.timetable.map((t) => ({
@@ -389,6 +398,7 @@ function App() {
         setTimetable(assigned)
         setUnassignedCourses([])
         setStats(result.stats)
+        setGridKey((prev) => prev + 1) // Force visual refresh of the grid
       } else {
         setError(result.errors ? result.errors.join('\n') : 'Scheduling failed.')
         showToast('Scheduling failed. Check logs.', 'error')
@@ -1445,7 +1455,7 @@ function App() {
             </aside>
 
             {/* Timetable Ledger Sheet */}
-            <main className={`lg:col-span-3 bg-white dark:bg-slate-900/30 border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-sm ${isLargeScreen ? 'overflow-x-auto' : 'overflow-hidden'}`}>
+            <main key={gridKey} className={`lg:col-span-3 bg-white dark:bg-slate-900/30 border border-slate-200/80 dark:border-slate-800/80 rounded-2xl p-5 shadow-sm ${isLargeScreen ? 'overflow-x-auto' : 'overflow-hidden'}`}>
 
               {loading ? (
                 /* Beautiful Skeleton Loading State */
