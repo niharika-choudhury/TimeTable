@@ -1,0 +1,29 @@
+# Python Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node/Vite packages & builds
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Environment files
+.env
+.env.*
+*.env
+frontend/.env
+
+# IDE / OS configs
+.vscode/
+.DS_Store
+Thumbs.db
+
+# App/temporary files
+temp_uploads/
