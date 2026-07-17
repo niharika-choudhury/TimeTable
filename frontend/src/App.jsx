@@ -366,13 +366,16 @@ function App() {
       const hasTimetable = result.timetable && Array.isArray(result.timetable) && result.timetable.length > 0
 
       if (res.ok && (result.status === 'success' || result.status === 'error' || hasTimetable)) {
-        setError(null)
-        if (result.status === 'error' || (result.stats && result.stats.status_name === 'UNKNOWN') || (result.message && result.message.toLowerCase().includes('fallback'))) {
-          setSuccessMessage(result.message || (result.errors ? result.errors.join('\n') : 'Timetable generated with fallback constraints.'))
-          showToast('Timetable loaded with fallback constraints.', 'info')
+        // Clear any previous hard blocks right away
+        setError(null);
+
+        if (result.status === 'error') {
+          // Treat it as a warning/info toast instead of a breaking error state
+          setSuccessMessage(result.message || (result.errors ? result.errors.join('\n') : 'Timetable generated with fallback constraints.'));
+          showToast('Timetable loaded with fallback constraints.', 'info');
         } else {
-          setSuccessMessage(result.message || 'Auto-Schedule compiled successfully!')
-          showToast('Auto-Schedule compiled successfully!', 'success')
+          setSuccessMessage(result.message || 'Auto-Schedule compiled successfully!');
+          showToast('Auto-Schedule compiled successfully!', 'success');
         }
 
         if (hasTimetable) {
