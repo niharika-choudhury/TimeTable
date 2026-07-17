@@ -365,7 +365,7 @@ function App() {
       const result = await res.json()
       const hasTimetable = result.timetable && Array.isArray(result.timetable) && result.timetable.length > 0
 
-      if (res.ok && (result.status === 'success' || hasTimetable)) {
+      if (res.ok && (result.status === 'success' || result.status === 'error' || hasTimetable)) {
         setError(null)
         if (result.status === 'error' || (result.stats && result.stats.status_name === 'UNKNOWN') || (result.message && result.message.toLowerCase().includes('fallback'))) {
           setSuccessMessage(result.message || (result.errors ? result.errors.join('\n') : 'Timetable generated with fallback constraints.'))
@@ -375,30 +375,35 @@ function App() {
           showToast('Auto-Schedule compiled successfully!', 'success')
         }
 
-        // Map backend output format to frontend sessions
-        const assigned = result.timetable.map((t) => ({
-          id: `${t.CourseCode}_I${t.InstanceIndex}_S${t.SessionIndex}`,
-          CourseCode: t.CourseCode,
-          CourseName: t.CourseName,
-          CourseType: t.CourseType,
-          SplitIndex: getSplitIndexFromCode(t.CourseCode),
-          SessionIndex: t.SessionIndex,
-          InstanceIndex: t.InstanceIndex,
-          Duration: t.Duration,
-          PreferredSlotCategory: getPreferredSlotFromCode(t.CourseCode),
-          ElectiveGroup: t.ElectiveGroup,
-          LabTiedTheoryCourse: getTiedTheoryFromCode(t.CourseCode),
-          LabSessionsIndex: getSessionsIndexFromCode(t.CourseCode, result.timetable),
-          DayIndex: t.DayIndex,
-          Day: t.Day,
-          StartTick: t.StartTick,
-          RoomID: t.RoomID
-        }))
+        if (hasTimetable) {
+          // Map backend output format to frontend sessions
+          const assigned = result.timetable.map((t) => ({
+            id: `${t.CourseCode}_I${t.InstanceIndex}_S${t.SessionIndex}`,
+            CourseCode: t.CourseCode,
+            CourseName: t.CourseName,
+            CourseType: t.CourseType,
+            SplitIndex: getSplitIndexFromCode(t.CourseCode),
+            SessionIndex: t.SessionIndex,
+            InstanceIndex: t.InstanceIndex,
+            Duration: t.Duration,
+            PreferredSlotCategory: getPreferredSlotFromCode(t.CourseCode),
+            ElectiveGroup: t.ElectiveGroup,
+            LabTiedTheoryCourse: getTiedTheoryFromCode(t.CourseCode),
+            LabSessionsIndex: getSessionsIndexFromCode(t.CourseCode, result.timetable),
+            DayIndex: t.DayIndex,
+            Day: t.Day,
+            StartTick: t.StartTick,
+            RoomID: t.RoomID
+          }))
 
-        setTimetable(assigned)
-        setUnassignedCourses([])
-        setStats(result.stats)
-        setGridKey((prev) => prev + 1) // Force visual refresh of the grid
+          setTimetable(assigned)
+          setUnassignedCourses([])
+          setStats(result.stats)
+          setGridKey((prev) => prev + 1) // Force visual refresh of the grid
+        } else {
+          setError(result.errors ? result.errors.join('\n') : 'Scheduling failed.')
+          showToast('Scheduling failed. Check logs.', 'error')
+        }
       } else {
         setError(result.errors ? result.errors.join('\n') : 'Scheduling failed.')
         showToast('Scheduling failed. Check logs.', 'error')
