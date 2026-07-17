@@ -1496,7 +1496,7 @@ function App() {
                     ))}
                   </div>
                 )
-              ) : timetable.length === 0 ? (
+              ) : courses.length === 0 ? (
                 /* Dynamic Empty State Call-to-Action */
                 <div className="flex flex-col items-center justify-center py-16 px-6 text-center border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-2xl bg-slate-50/40 dark:bg-slate-950/10">
                   <Calendar className="w-12 h-12 text-[#4A607A] dark:text-indigo-400 mb-4 animate-pulse duration-2000" />

@@ -121,22 +121,30 @@ def solve_timetable(
 ) -> Dict[str, Any]:
     """
     Build and solve the CP-SAT timetabling model.
-
-    Parameters
-    ----------
-    courses   : list of dicts from the 'Courses' sheet (post-validation).
-    resources : list of dicts from the 'Resources' sheet.
-    time_limit_seconds : solver wall-clock budget.
-
-    Returns
-    -------
-    dict with keys:
-      status    : "success" | "error"
-      timetable : list[dict]  (on success)
-      errors    : list[str]   (on error)
-      stats     : dict        (solver statistics)
+    Falls back to relaxed soft constraints if hard constraints are infeasible.
     """
+    # Try solving with hard constraints first
+    res = _solve_timetable_internal(courses, resources, time_limit_seconds, relaxed=False)
+    if res["status"] == "success":
+        return res
 
+    # Fallback solve with soft constraints
+    print("Warning: Hard scheduling constraints are infeasible. Retrying with relaxed soft constraints...")
+    res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds, relaxed=True)
+    if res_relaxed["status"] == "success":
+        res_relaxed["message"] = "Best-effort timetable generated with relaxed constraints."
+        return res_relaxed
+
+    # If even fallback fails, return original error
+    return res
+
+
+def _solve_timetable_internal(
+    courses: List[Dict[str, Any]],
+    resources: List[Dict[str, Any]],
+    time_limit_seconds: float = 30.0,
+    relaxed: bool = False,
+) -> Dict[str, Any]:
     model = cp_model.CpModel()
     validation_errors: List[str] = []
 
@@ -249,9 +257,15 @@ def solve_timetable(
 
         # Base set from slot type
         if ctype == "T":
-            base = list(TUTORIAL_STARTS)
+            if relaxed:
+                base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
+            else:
+                base = list(TUTORIAL_STARTS)
         elif code.startswith("E7"):
-            base = list(E7_STARTS)
+            if relaxed:
+                base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
+            else:
+                base = list(E7_STARTS)
         elif dur == 1.5:
             base = list(STARTS_H1)
         elif dur == 1.0:
@@ -261,12 +275,13 @@ def solve_timetable(
             base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
 
         # Filter by slot category isolation constraints
-        if slot_cat == "SL0":
-            # Morning max start at 13:00 (tick 10)
-            base = [t for t in base if t <= SL0_MAX_START_TICK]
-        elif slot_cat == "SL1":
-            # Afternoon min start 14:00 (tick 12) up to 18:00 (tick 20)
-            base = [t for t in base if t >= SL1_MIN_START_TICK and t <= SL1_MAX_START_TICK]
+        if not relaxed:
+            if slot_cat == "SL0":
+                # Morning max start at 13:00 (tick 10)
+                base = [t for t in base if t <= SL0_MAX_START_TICK]
+            elif slot_cat == "SL1":
+                # Afternoon min start 14:00 (tick 12) up to 18:00 (tick 20)
+                base = [t for t in base if t >= SL1_MIN_START_TICK and t <= SL1_MAX_START_TICK]
 
         # Ensure session fits within the day
         base = [t for t in base if t + span <= TICKS_PER_DAY]
@@ -288,12 +303,16 @@ def solve_timetable(
     # Elective group shared variables
     group_vars: Dict[tuple, tuple] = {}
 
+    # Accumulate penalized soft constraints in relaxed mode
+    penalties = []
+
     for inst in instances:
         icode = inst["icode"]
         code  = inst["code"]
         ctype = inst["ctype"]
         freq  = inst["freq"]
         group  = inst["group"]
+        slot_cat = inst["slot_cat"]
 
         # Route standard labs and Special Labs (P) for Year 4
         if ctype == "L":
@@ -356,8 +375,13 @@ def solve_timetable(
             abs_end = model.NewIntVar(0, 120, f"abs_end_{icode}_s{s}")
             model.Add(abs_end == abs_start + s_span)
 
-            # Flat timeline interval variable for cohort non-overlap
-            cohort_iv = model.NewIntervalVar(abs_start, s_span, abs_end, f"coh_iv_{icode}_s{s}")
+            # Flat timeline interval variable for cohort non-overlap (optional if relaxed)
+            if relaxed:
+                cohort_active = model.NewBoolVar(f"cohort_active_{icode}_s{s}")
+                cohort_iv = model.NewOptionalIntervalVar(abs_start, s_span, abs_end, cohort_active, f"coh_iv_{icode}_s{s}")
+                penalties.append(cohort_active.Not() * 200)
+            else:
+                cohort_iv = model.NewIntervalVar(abs_start, s_span, abs_end, f"coh_iv_{icode}_s{s}")
             interval_vars[key] = cohort_iv
 
             # --- Room selection (exactly-one) ---
@@ -377,6 +401,31 @@ def solve_timetable(
 
             model.Add(sum(pres.values()) == 1)
 
+            # In relaxed mode, apply soft penalties for other constraints
+            if relaxed:
+                # Morning/Afternoon isolation
+                if slot_cat == "SL0":
+                    sl0_violated = model.NewBoolVar(f"sl0_violated_{icode}_s{s}")
+                    model.Add(tv <= SL0_MAX_START_TICK).OnlyEnforceIf(sl0_violated.Not())
+                    penalties.append(sl0_violated * 100)
+                elif slot_cat == "SL1":
+                    sl1_violated = model.NewBoolVar(f"sl1_violated_{icode}_s{s}")
+                    model.Add(tv >= SL1_MIN_START_TICK).OnlyEnforceIf(sl1_violated.Not())
+                    model.Add(tv <= SL1_MAX_START_TICK).OnlyEnforceIf(sl1_violated.Not())
+                    penalties.append(sl1_violated * 100)
+
+                # Tutorial isolation
+                if ctype == "T":
+                    tut_violated = model.NewBoolVar(f"tut_violated_{icode}_s{s}")
+                    model.AddAllowedAssignments([tv], [(0,), (18,)]).OnlyEnforceIf(tut_violated.Not())
+                    penalties.append(tut_violated * 50)
+
+                # Open Elective isolation
+                if code.startswith("E7"):
+                    e7_violated = model.NewBoolVar(f"e7_violated_{icode}_s{s}")
+                    model.AddAllowedAssignments([tv], [(8,), (10,)]).OnlyEnforceIf(e7_violated.Not())
+                    penalties.append(e7_violated * 50)
+
     if validation_errors:
         return {"status": "error", "errors": validation_errors}
 
@@ -394,7 +443,16 @@ def solve_timetable(
         icode = inst["icode"]
         freq  = inst["freq"]
         if inst["ctype"] in ("C", "E") and freq > 1:
-            model.AddAllDifferent([day_v[(icode, s)] for s in range(freq)])
+            if relaxed:
+                # Add soft penalty for daily theory cap violation
+                for s1 in range(freq):
+                    for s2 in range(s1 + 1, freq):
+                        same_day = model.NewBoolVar(f"same_day_{icode}_s{s1}_s{s2}")
+                        model.Add(day_v[(icode, s1)] == day_v[(icode, s2)]).OnlyEnforceIf(same_day)
+                        model.Add(day_v[(icode, s1)] != day_v[(icode, s2)]).OnlyEnforceIf(same_day.Not())
+                        penalties.append(same_day * 150)
+            else:
+                model.AddAllDifferent([day_v[(icode, s)] for s in range(freq)])
 
     # ----------------------------------------------------------------
     # 7. Rule 2 — Linked Lab-Theory Same-Day Ties (Index 8)
@@ -415,16 +473,28 @@ def solve_timetable(
             t_freq = theory_inst["freq"]
             t_icode = theory_inst["icode"]
 
-            if t_freq == 1:
-                model.Add(lab_day == day_v[(t_icode, 0)])
-            else:
+            if relaxed:
+                # Soft same-day tie
+                tie_satisfied = model.NewBoolVar(f"tie_sat_{lab_icode}")
                 match_bools = []
                 for ts in range(t_freq):
                     b = model.NewBoolVar(f"tie_{lab_icode}_{t_icode}_s{ts}")
                     model.Add(lab_day == day_v[(t_icode, ts)]).OnlyEnforceIf(b)
                     model.Add(lab_day != day_v[(t_icode, ts)]).OnlyEnforceIf(b.Not())
                     match_bools.append(b)
-                model.AddBoolOr(match_bools)
+                model.AddBoolOr(match_bools).OnlyEnforceIf(tie_satisfied)
+                penalties.append(tie_satisfied.Not() * 100)
+            else:
+                if t_freq == 1:
+                    model.Add(lab_day == day_v[(t_icode, 0)])
+                else:
+                    match_bools = []
+                    for ts in range(t_freq):
+                        b = model.NewBoolVar(f"tie_{lab_icode}_{t_icode}_s{ts}")
+                        model.Add(lab_day == day_v[(t_icode, ts)]).OnlyEnforceIf(b)
+                        model.Add(lab_day != day_v[(t_icode, ts)]).OnlyEnforceIf(b.Not())
+                        match_bools.append(b)
+                    model.AddBoolOr(match_bools)
 
     # ----------------------------------------------------------------
     # 7.5. Lab Multi-Session Parallel (SS-0) & Separate Day (SS-1) Constraints
@@ -490,6 +560,10 @@ def solve_timetable(
         if elecs:
             model.AddNoOverlap(core_3_intervals + elecs)
 
+    # Set objective function in relaxed mode
+    if relaxed and penalties:
+        model.Minimize(sum(penalties))
+
     # ----------------------------------------------------------------
     # 9. Solve
     # ----------------------------------------------------------------
@@ -508,6 +582,11 @@ def solve_timetable(
         "num_instances": len(instances),
         "num_sessions": sum(i["freq"] for i in instances),
     }
+
+    if relaxed and status in (cp_model.FEASIBLE, cp_model.OPTIMAL) and penalties:
+        stats["total_penalty"] = int(solver.ObjectiveValue())
+    else:
+        stats["total_penalty"] = 0
 
     if status not in (cp_model.FEASIBLE, cp_model.OPTIMAL):
         return {

@@ -248,7 +248,7 @@ def api_schedule_generate_direct():
         if result["status"] == "success":
             return {
                 "status": "success",
-                "message": "Timetable generated successfully.",
+                "message": result.get("message", "Timetable generated successfully."),
                 "timetable": result["timetable"],
                 "stats": result.get("stats", {})
             }
@@ -294,7 +294,7 @@ async def api_schedule_generate(file: UploadFile = File(...)):
         if result["status"] == "success":
             return {
                 "status": "success",
-                "message": f"Timetable generated — {len(result['timetable'])} allocations.",
+                "message": result.get("message", f"Timetable generated — {len(result['timetable'])} allocations."),
                 "timetable": result["timetable"],
                 "stats": result.get("stats", {}),
             }
