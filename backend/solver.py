@@ -117,25 +117,36 @@ def _detect_cohort(code: str, split_index: int,
 def solve_timetable(
     courses: List[Dict[str, Any]],
     resources: List[Dict[str, Any]],
-    time_limit_seconds: float = 30.0,
+    time_limit_seconds: float = 45.0,
 ) -> Dict[str, Any]:
     """
     Build and solve the CP-SAT timetabling model.
-    Falls back to relaxed soft constraints if hard constraints are infeasible.
+    Falls back to relaxed soft constraints or super-relaxed constraints if hard constraints are infeasible.
     """
-    # Try solving with hard constraints first
-    res = _solve_timetable_internal(courses, resources, time_limit_seconds, relaxed=False)
+    t1 = max(3.0, time_limit_seconds * 0.3)
+    t2 = max(5.0, time_limit_seconds * 0.5)
+    t3 = max(2.0, time_limit_seconds * 0.2)
+
+    # 1. Hard Solve
+    res = _solve_timetable_internal(courses, resources, time_limit_seconds=t1, relaxed=False, super_relaxed=False)
     if res["status"] == "success":
         return res
 
-    # Fallback solve with soft constraints
+    # 2. Relaxed Soft Solve
     print("Warning: Hard scheduling constraints are infeasible. Retrying with relaxed soft constraints...")
-    res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds, relaxed=True)
+    res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds=t2, relaxed=True, super_relaxed=False)
     if res_relaxed["status"] == "success":
         res_relaxed["message"] = "Best-effort timetable generated with relaxed constraints."
         return res_relaxed
 
-    # If even fallback fails, return original error
+    # 3. Super-Relaxed Solve
+    print("Warning: Soft scheduling constraints are also infeasible. Retrying with super-relaxed constraints...")
+    res_super = _solve_timetable_internal(courses, resources, time_limit_seconds=t3, relaxed=True, super_relaxed=True)
+    if res_super["status"] == "success":
+        res_super["message"] = "Emergency fallback: Timetable generated with minimal constraints (room no-overlap only)."
+        return res_super
+
+    # If all fail, return the first error
     return res
 
 
@@ -144,6 +155,7 @@ def _solve_timetable_internal(
     resources: List[Dict[str, Any]],
     time_limit_seconds: float = 30.0,
     relaxed: bool = False,
+    super_relaxed: bool = False,
 ) -> Dict[str, Any]:
     model = cp_model.CpModel()
     validation_errors: List[str] = []
@@ -257,12 +269,12 @@ def _solve_timetable_internal(
 
         # Base set from slot type
         if ctype == "T":
-            if relaxed:
+            if relaxed or super_relaxed:
                 base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
             else:
                 base = list(TUTORIAL_STARTS)
         elif code.startswith("E7"):
-            if relaxed:
+            if relaxed or super_relaxed:
                 base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
             else:
                 base = list(E7_STARTS)
@@ -275,7 +287,7 @@ def _solve_timetable_internal(
             base = [t for t in range(0, TICKS_PER_DAY - span + 1, 2)]
 
         # Filter by slot category isolation constraints
-        if not relaxed:
+        if not relaxed and not super_relaxed:
             if slot_cat == "SL0":
                 # Morning max start at 13:00 (tick 10)
                 base = [t for t in base if t <= SL0_MAX_START_TICK]
@@ -375,14 +387,15 @@ def _solve_timetable_internal(
             abs_end = model.NewIntVar(0, 120, f"abs_end_{icode}_s{s}")
             model.Add(abs_end == abs_start + s_span)
 
-            # Flat timeline interval variable for cohort non-overlap (optional if relaxed)
-            if relaxed:
-                cohort_active = model.NewBoolVar(f"cohort_active_{icode}_s{s}")
-                cohort_iv = model.NewOptionalIntervalVar(abs_start, s_span, abs_end, cohort_active, f"coh_iv_{icode}_s{s}")
-                penalties.append(cohort_active.Not() * 200)
-            else:
-                cohort_iv = model.NewIntervalVar(abs_start, s_span, abs_end, f"coh_iv_{icode}_s{s}")
-            interval_vars[key] = cohort_iv
+            # Flat timeline interval variable for cohort non-overlap (optional if relaxed, completely omitted if super_relaxed)
+            if not super_relaxed:
+                if relaxed:
+                    cohort_active = model.NewBoolVar(f"cohort_active_{icode}_s{s}")
+                    cohort_iv = model.NewOptionalIntervalVar(abs_start, s_span, abs_end, cohort_active, f"coh_iv_{icode}_s{s}")
+                    penalties.append(cohort_active.Not() * 200)
+                else:
+                    cohort_iv = model.NewIntervalVar(abs_start, s_span, abs_end, f"coh_iv_{icode}_s{s}")
+                interval_vars[key] = cohort_iv
 
             # --- Room selection (exactly-one) ---
             pres: Dict[str, Any] = {}
@@ -439,62 +452,64 @@ def _solve_timetable_internal(
     # ----------------------------------------------------------------
     # 6. Rule 6 — Daily Theory Cap
     # ----------------------------------------------------------------
-    for inst in instances:
-        icode = inst["icode"]
-        freq  = inst["freq"]
-        if inst["ctype"] in ("C", "E") and freq > 1:
-            if relaxed:
-                # Add soft penalty for daily theory cap violation
-                for s1 in range(freq):
-                    for s2 in range(s1 + 1, freq):
-                        same_day = model.NewBoolVar(f"same_day_{icode}_s{s1}_s{s2}")
-                        model.Add(day_v[(icode, s1)] == day_v[(icode, s2)]).OnlyEnforceIf(same_day)
-                        model.Add(day_v[(icode, s1)] != day_v[(icode, s2)]).OnlyEnforceIf(same_day.Not())
-                        penalties.append(same_day * 150)
-            else:
-                model.AddAllDifferent([day_v[(icode, s)] for s in range(freq)])
+    if not super_relaxed:
+        for inst in instances:
+            icode = inst["icode"]
+            freq  = inst["freq"]
+            if inst["ctype"] in ("C", "E") and freq > 1:
+                if relaxed:
+                    # Add soft penalty for daily theory cap violation
+                    for s1 in range(freq):
+                        for s2 in range(s1 + 1, freq):
+                            same_day = model.NewBoolVar(f"same_day_{icode}_s{s1}_s{s2}")
+                            model.Add(day_v[(icode, s1)] == day_v[(icode, s2)]).OnlyEnforceIf(same_day)
+                            model.Add(day_v[(icode, s1)] != day_v[(icode, s2)]).OnlyEnforceIf(same_day.Not())
+                            penalties.append(same_day * 150)
+                else:
+                    model.AddAllDifferent([day_v[(icode, s)] for s in range(freq)])
 
     # ----------------------------------------------------------------
     # 7. Rule 2 — Linked Lab-Theory Same-Day Ties (Index 8)
     # ----------------------------------------------------------------
-    for inst in instances:
-        if inst["ctype"] == "L" and inst["x2"] == 8 and inst["tied_to"]:
-            lab_icode = inst["icode"]
-            theory_code = inst["tied_to"]
+    if not super_relaxed:
+        for inst in instances:
+            if inst["ctype"] == "L" and inst["x2"] == 8 and inst["tied_to"]:
+                lab_icode = inst["icode"]
+                theory_code = inst["tied_to"]
 
-            theory_inst = next(
-                (x for x in instances if x["code"] == theory_code and x["ii"] == 0),
-                None,
-            )
-            if theory_inst is None:
-                continue
+                theory_inst = next(
+                    (x for x in instances if x["code"] == theory_code and x["ii"] == 0),
+                    None,
+                )
+                if theory_inst is None:
+                    continue
 
-            lab_day = day_v[(lab_icode, 0)]
-            t_freq = theory_inst["freq"]
-            t_icode = theory_inst["icode"]
+                lab_day = day_v[(lab_icode, 0)]
+                t_freq = theory_inst["freq"]
+                t_icode = theory_inst["icode"]
 
-            if relaxed:
-                # Soft same-day tie
-                tie_satisfied = model.NewBoolVar(f"tie_sat_{lab_icode}")
-                match_bools = []
-                for ts in range(t_freq):
-                    b = model.NewBoolVar(f"tie_{lab_icode}_{t_icode}_s{ts}")
-                    model.Add(lab_day == day_v[(t_icode, ts)]).OnlyEnforceIf(b)
-                    model.Add(lab_day != day_v[(t_icode, ts)]).OnlyEnforceIf(b.Not())
-                    match_bools.append(b)
-                model.AddBoolOr(match_bools).OnlyEnforceIf(tie_satisfied)
-                penalties.append(tie_satisfied.Not() * 100)
-            else:
-                if t_freq == 1:
-                    model.Add(lab_day == day_v[(t_icode, 0)])
-                else:
+                if relaxed:
+                    # Soft same-day tie
+                    tie_satisfied = model.NewBoolVar(f"tie_sat_{lab_icode}")
                     match_bools = []
                     for ts in range(t_freq):
                         b = model.NewBoolVar(f"tie_{lab_icode}_{t_icode}_s{ts}")
                         model.Add(lab_day == day_v[(t_icode, ts)]).OnlyEnforceIf(b)
                         model.Add(lab_day != day_v[(t_icode, ts)]).OnlyEnforceIf(b.Not())
                         match_bools.append(b)
-                    model.AddBoolOr(match_bools)
+                    model.AddBoolOr(match_bools).OnlyEnforceIf(tie_satisfied)
+                    penalties.append(tie_satisfied.Not() * 100)
+                else:
+                    if t_freq == 1:
+                        model.Add(lab_day == day_v[(t_icode, 0)])
+                    else:
+                        match_bools = []
+                        for ts in range(t_freq):
+                            b = model.NewBoolVar(f"tie_{lab_icode}_{t_icode}_s{ts}")
+                            model.Add(lab_day == day_v[(t_icode, ts)]).OnlyEnforceIf(b)
+                            model.Add(lab_day != day_v[(t_icode, ts)]).OnlyEnforceIf(b.Not())
+                            match_bools.append(b)
+                        model.AddBoolOr(match_bools)
 
     # ----------------------------------------------------------------
     # 7.5. Lab Multi-Session Parallel (SS-0) & Separate Day (SS-1) Constraints
@@ -525,40 +540,43 @@ def _solve_timetable_internal(
     # ----------------------------------------------------------------
     # 8. Cohort non-overlap (Year 1, 2, 3 only)
     # ----------------------------------------------------------------
-    cohort_intervals = defaultdict(list)
-    core_3_intervals = []
-    elective_3_intervals = defaultdict(list)
+    if not super_relaxed:
+        cohort_intervals = defaultdict(list)
+        core_3_intervals = []
+        elective_3_intervals = defaultdict(list)
 
-    for inst in instances:
-        icode = inst["icode"]
-        code  = inst["code"]
-        freq  = inst["freq"]
+        for inst in instances:
+            icode = inst["icode"]
+            code  = inst["code"]
+            freq  = inst["freq"]
 
-        cohort = _detect_cohort(code, inst["split"], courses)
-        if cohort is None:
-            continue
+            cohort = _detect_cohort(code, inst["split"], courses)
+            if cohort is None:
+                continue
 
-        for s in range(freq):
-            key = (icode, s)
-            iv = interval_vars[key]
-            
-            if cohort in (1, 2):
-                cohort_intervals[cohort].append(iv)
-            elif cohort == 3:
-                if code.startswith("E3") and inst["group"]:
-                    elective_3_intervals[inst["group"]].append(iv)
-                else:
-                    core_3_intervals.append(iv)
+            for s in range(freq):
+                key = (icode, s)
+                iv = interval_vars.get(key)
+                if iv is None:
+                    continue
+                
+                if cohort in (1, 2):
+                    cohort_intervals[cohort].append(iv)
+                elif cohort == 3:
+                    if code.startswith("E3") and inst["group"]:
+                        elective_3_intervals[inst["group"]].append(iv)
+                    else:
+                        core_3_intervals.append(iv)
 
-    for cohort, ivs in cohort_intervals.items():
-        if len(ivs) > 1:
-            model.AddNoOverlap(ivs)
+        for cohort, ivs in cohort_intervals.items():
+            if len(ivs) > 1:
+                model.AddNoOverlap(ivs)
 
-    if len(core_3_intervals) > 1:
-        model.AddNoOverlap(core_3_intervals)
-    for grp, elecs in elective_3_intervals.items():
-        if elecs:
-            model.AddNoOverlap(core_3_intervals + elecs)
+        if len(core_3_intervals) > 1:
+            model.AddNoOverlap(core_3_intervals)
+        for grp, elecs in elective_3_intervals.items():
+            if elecs:
+                model.AddNoOverlap(core_3_intervals + elecs)
 
     # Set objective function in relaxed mode
     if relaxed and penalties:
@@ -583,12 +601,18 @@ def _solve_timetable_internal(
         "num_sessions": sum(i["freq"] for i in instances),
     }
 
-    if relaxed and status in (cp_model.FEASIBLE, cp_model.OPTIMAL) and penalties:
-        stats["total_penalty"] = int(solver.ObjectiveValue())
+    # Ensure we return solution if found, even if status is UNKNOWN (due to timeout)
+    has_solution = (status in (cp_model.FEASIBLE, cp_model.OPTIMAL)) or (len(solver.ResponseProto().solution) > 0)
+
+    if relaxed and has_solution and penalties:
+        try:
+            stats["total_penalty"] = int(solver.ObjectiveValue())
+        except Exception:
+            stats["total_penalty"] = 0
     else:
         stats["total_penalty"] = 0
 
-    if status not in (cp_model.FEASIBLE, cp_model.OPTIMAL):
+    if not has_solution:
         return {
             "status": "error",
             "errors": [
