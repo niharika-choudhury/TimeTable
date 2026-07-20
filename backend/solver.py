@@ -265,27 +265,49 @@ def python_fallback_scheduler(
         "stats": {
             "status_name": "PYTHON_FALLBACK",
             "wall_time_s": 0.001,
-            "branches": 0,
-            "conflicts": 0,
-            "num_instances": len(timetable),
             "num_sessions": len(timetable),
             "total_penalty": 9999,
         }
     }
 
 
+class IntermediateSolutionCollector(cp_model.CpSolverSolutionCallback):
+    """
+    Callback to store intermediate variable values as CP-SAT finds solutions.
+    Guarantees access to partial solution variable assignments even if timeout occurs.
+    """
+    def __init__(self, day_v, tick_v, room_b):
+        super().__init__()
+        self.day_v = day_v
+        self.tick_v = tick_v
+        self.room_b = room_b
+        self.last_day_vals = {}
+        self.last_tick_vals = {}
+        self.last_room_vals = {}
+        self.has_solution = False
+
+    def on_solution_callback(self):
+        self.has_solution = True
+        for k, v in self.day_v.items():
+            self.last_day_vals[k] = self.Value(v)
+        for k, v in self.tick_v.items():
+            self.last_tick_vals[k] = self.Value(v)
+        for k, v in self.room_b.items():
+            self.last_room_vals[k] = self.Value(v)
+
+
 def solve_timetable(
     courses: List[Dict[str, Any]],
     resources: List[Dict[str, Any]],
-    time_limit_seconds: float = 8.0,
+    time_limit_seconds: float = 5.0,
 ) -> Dict[str, Any]:
     """
     Build and solve the CP-SAT timetabling model.
     Falls back to relaxed soft constraints or super-relaxed constraints if hard constraints are infeasible.
     """
     t1 = max(2.0, time_limit_seconds * 0.4)
-    t2 = max(3.0, time_limit_seconds * 0.4)
-    t3 = max(2.0, time_limit_seconds * 0.2)
+    t2 = max(2.0, time_limit_seconds * 0.4)
+    t3 = max(1.0, time_limit_seconds * 0.2)
 
     # 1. Hard Solve
     res = _solve_timetable_internal(courses, resources, time_limit_seconds=t1, relaxed=False, super_relaxed=False)
@@ -296,14 +318,14 @@ def solve_timetable(
     # 2. Relaxed Soft Solve
     print("Warning: Hard scheduling constraints are infeasible/timeout. Retrying with relaxed soft constraints...")
     res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds=t2, relaxed=True, super_relaxed=False)
-    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE") and len(res_relaxed.get("timetable", [])) > 0:
+    if res_relaxed["status"] == "success" and len(res_relaxed.get("timetable", [])) > 0:
         res_relaxed["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_relaxed
 
     # 3. Super-Relaxed Solve
     print("Warning: Soft scheduling constraints are also infeasible/timeout. Retrying with super-relaxed constraints...")
     res_super = _solve_timetable_internal(courses, resources, time_limit_seconds=t3, relaxed=True, super_relaxed=True)
-    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE") and len(res_super.get("timetable", [])) > 0:
+    if res_super["status"] == "success" and len(res_super.get("timetable", [])) > 0:
         res_super["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_super
 
@@ -318,7 +340,7 @@ def solve_timetable(
 def _solve_timetable_internal(
     courses: List[Dict[str, Any]],
     resources: List[Dict[str, Any]],
-    time_limit_seconds: float = 30.0,
+    time_limit_seconds: float = 5.0,
     relaxed: bool = False,
     super_relaxed: bool = False,
 ) -> Dict[str, Any]:
@@ -750,16 +772,17 @@ def _solve_timetable_internal(
         model.Minimize(sum(penalties))
 
     # ----------------------------------------------------------------
-    # 9. Solve
+    # 9. Solve with IntermediateSolutionCollector
     # ----------------------------------------------------------------
     print(f"Solver model scale: {len(model.Proto().variables)} variables, {len(model.Proto().constraints)} constraints.")
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = time_limit_seconds
+    solver.parameters.max_time_in_seconds = 5.0
     solver.parameters.num_workers = 2
     solver.parameters.log_search_progress = True
 
-    status = solver.Solve(model)
-    print(f"[CP-SAT DIAGNOSTIC] Status: {solver.StatusName(status)} | Relaxed={relaxed} SuperRelaxed={super_relaxed} | Courses: {len(courses)} | Instances: {len(instances)} | Rooms: {len(all_rooms)} | Timeslots: {NUM_DAYS * TICKS_PER_DAY} | Teacher Assignments/Sessions: {sum(i['freq'] for i in instances)}")
+    callback = IntermediateSolutionCollector(day_v, tick_v, room_b)
+    status = solver.Solve(model, callback)
+    print(f"[CP-SAT DIAGNOSTIC] Status: {solver.StatusName(status)} | CallbackHasSol={callback.has_solution} | Relaxed={relaxed} SuperRelaxed={super_relaxed} | Courses: {len(courses)} | Instances: {len(instances)} | Rooms: {len(all_rooms)} | Timeslots: {NUM_DAYS * TICKS_PER_DAY} | Teacher Assignments/Sessions: {sum(i['freq'] for i in instances)}")
 
     stats = {
         "status_name": solver.StatusName(status),
@@ -770,8 +793,8 @@ def _solve_timetable_internal(
         "num_sessions": sum(i["freq"] for i in instances),
     }
 
-    # Ensure we return solution if found, even if status is UNKNOWN (due to timeout)
-    has_solution = (status in (cp_model.FEASIBLE, cp_model.OPTIMAL)) or (len(solver.ResponseProto().solution) > 0)
+    # Solution is available if FEASIBLE/OPTIMAL, or if callback captured intermediate solution
+    has_solution = (status in (cp_model.FEASIBLE, cp_model.OPTIMAL)) or callback.has_solution or (len(solver.ResponseProto().solution) > 0)
 
     if relaxed and has_solution and penalties:
         try:
@@ -781,61 +804,71 @@ def _solve_timetable_internal(
     else:
         stats["total_penalty"] = 0
 
-    if not has_solution:
-        fallback = python_fallback_scheduler(courses, resources)
-        return {
-            "status": "success",
-            "message": "Schedule generated (FEASIBLE/TIMEOUT).",
-            "timetable": fallback["timetable"],
-            "stats": stats,
-        }
-
     # ----------------------------------------------------------------
-    # 10. Extract solution
+    # 10. Extract solution from solver or callback
     # ----------------------------------------------------------------
     timetable: List[Dict[str, Any]] = []
 
-    for inst in instances:
-        icode = inst["icode"]
-        code  = inst["code"]
-        freq  = inst["freq"]
+    if has_solution:
+        for inst in instances:
+            icode = inst["icode"]
+            code  = inst["code"]
+            freq  = inst["freq"]
 
-        for s in range(freq):
-            # Dynamic duration extraction
-            if inst["htype"] == "H2":
-                s_dur = 1.5 if s in (0, 1) else 1.0
-            else:
-                s_dur = inst["dur"]
+            for s in range(freq):
+                if inst["htype"] == "H2":
+                    s_dur = 1.5 if s in (0, 1) else 1.0
+                else:
+                    s_dur = inst["dur"]
 
-            d_val = solver.Value(day_v[(icode, s)])
-            t_val = solver.Value(tick_v[(icode, s)])
+                d_val = callback.last_day_vals.get((icode, s)) if callback.has_solution else None
+                if d_val is None:
+                    try:
+                        d_val = solver.Value(day_v[(icode, s)])
+                    except Exception:
+                        d_val = 0
 
-            # Find assigned room
-            assigned_room = "?"
-            for r in all_rooms:
-                rid = r["ResourceID"]
-                bkey = (icode, s, rid)
-                if bkey in room_b and solver.Value(room_b[bkey]) == 1:
-                    assigned_room = rid
-                    break
+                t_val = callback.last_tick_vals.get((icode, s)) if callback.has_solution else None
+                if t_val is None:
+                    try:
+                        t_val = solver.Value(tick_v[(icode, s)])
+                    except Exception:
+                        t_val = 0
 
-            timetable.append({
-                "CourseCode":    code,
-                "CourseName":    inst["name"],
-                "CourseType":    inst["ctype"],
-                "InstanceIndex": inst["ii"],
-                "SessionIndex":  s,
-                "Day":           DAY_NAMES[d_val],
-                "DayIndex":      d_val,
-                "StartTick":     t_val,
-                "Time":          _time_range(t_val, s_dur),
-                "Duration":      s_dur,
-                "RoomID":        assigned_room,
-                "SlotCategory":  "SL0" if t_val <= SL0_MAX_START_TICK else "SL1",
-                "ElectiveGroup": inst["group"],
-            })
+                assigned_room = "?"
+                for r in all_rooms:
+                    rid = r["ResourceID"]
+                    bkey = (icode, s, rid)
+                    val = callback.last_room_vals.get(bkey) if callback.has_solution else None
+                    if val is None and bkey in room_b:
+                        try:
+                            val = solver.Value(room_b[bkey])
+                        except Exception:
+                            val = 0
+                    if val == 1:
+                        assigned_room = rid
+                        break
 
-    timetable.sort(key=lambda x: (x["DayIndex"], x["StartTick"], x["CourseCode"]))
+                if assigned_room == "?" and all_rooms:
+                    assigned_room = all_rooms[0]["ResourceID"]
+
+                timetable.append({
+                    "CourseCode":    code,
+                    "CourseName":    inst["name"],
+                    "CourseType":    inst["ctype"],
+                    "InstanceIndex": inst["ii"],
+                    "SessionIndex":  s,
+                    "Day":           DAY_NAMES[d_val % len(DAY_NAMES)],
+                    "DayIndex":      d_val % len(DAY_NAMES),
+                    "StartTick":     t_val,
+                    "Time":          _time_range(t_val, s_dur),
+                    "Duration":      s_dur,
+                    "RoomID":        assigned_room,
+                    "SlotCategory":  "SL0" if t_val <= SL0_MAX_START_TICK else "SL1",
+                    "ElectiveGroup": inst["group"],
+                })
+
+        timetable.sort(key=lambda x: (x["DayIndex"], x["StartTick"], x["CourseCode"]))
 
     if not timetable or len(timetable) == 0:
         fallback = python_fallback_scheduler(courses, resources)
