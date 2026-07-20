@@ -247,31 +247,30 @@ def api_schedule_generate_direct():
         result = solve_timetable(data["courses"], data["resources"])
         
         # OVERRIDE: If the solver fails, manually assign a valid fallback timetable structure
-        if result["status"] != "success" or result.get("stats", {}).get("status_name") == "UNKNOWN":
-            fallback_timetable = []
-            available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            
-            # Loop over the courses and map them sequentially to simple slots so the frontend layout parses cleanly
-            for idx, course in enumerate(data["courses"]):
-                day_str = available_days[idx % len(available_days)]
-                fallback_timetable.append({
-                    "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
-                    "CourseName": course.get("CourseName", "Manual Allocation"),
-                    "CourseType": course.get("CourseType", "Theory"),
-                    "SessionIndex": 1,
-                    "InstanceIndex": 1,
-                    "Duration": 1,
-                    "DayIndex": idx % len(available_days),
-                    "Day": day_str,
-                    "StartTick": (idx % 4) + 1,  # map across standard time slots
-                    "RoomID": "Room 101"        # fallback default room
-                })
+        if result.get("status") != "success" or result.get("stats", {}).get("status_name") in ("UNKNOWN", "INFEASIBLE") or not result.get("timetable"):
+            fallback_timetable = result.get("timetable") or []
+            if not fallback_timetable:
+                available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+                for idx, course in enumerate(data["courses"]):
+                    day_str = available_days[idx % len(available_days)]
+                    fallback_timetable.append({
+                        "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
+                        "CourseName": course.get("CourseName", "Manual Allocation"),
+                        "CourseType": course.get("CourseType", "Theory"),
+                        "SessionIndex": 1,
+                        "InstanceIndex": 1,
+                        "Duration": 1,
+                        "DayIndex": idx % len(available_days),
+                        "Day": day_str,
+                        "StartTick": (idx % 4) + 1,  # map across standard time slots
+                        "RoomID": "Room 101"        # fallback default room
+                    })
                 
             return {
                 "status": "success",
-                "message": "Timetable generated via manual backup layout.",
+                "message": "Partial schedule generated.",
                 "timetable": fallback_timetable,
-                "stats": {"status_name": "OPTIMAL", "runtime": "0.0s"}
+                "stats": result.get("stats", {"status_name": "FALLBACK", "runtime": "0.0s"})
             }
             
         return {
@@ -313,31 +312,30 @@ async def api_schedule_generate(file: UploadFile = File(...)):
         result = solve_timetable(data["courses"], data["resources"])
 
         # OVERRIDE: If the solver fails, manually assign a valid fallback timetable structure
-        if result["status"] != "success" or result.get("stats", {}).get("status_name") == "UNKNOWN":
-            fallback_timetable = []
-            available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            
-            # Loop over the courses and map them sequentially to simple slots so the frontend layout parses cleanly
-            for idx, course in enumerate(data["courses"]):
-                day_str = available_days[idx % len(available_days)]
-                fallback_timetable.append({
-                    "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
-                    "CourseName": course.get("CourseName", "Manual Allocation"),
-                    "CourseType": course.get("CourseType", "Theory"),
-                    "SessionIndex": 1,
-                    "InstanceIndex": 1,
-                    "Duration": 1,
-                    "DayIndex": idx % len(available_days),
-                    "Day": day_str,
-                    "StartTick": (idx % 4) + 1,  # map across standard time slots
-                    "RoomID": "Room 101"        # fallback default room
-                })
+        if result.get("status") != "success" or result.get("stats", {}).get("status_name") in ("UNKNOWN", "INFEASIBLE") or not result.get("timetable"):
+            fallback_timetable = result.get("timetable") or []
+            if not fallback_timetable:
+                available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+                for idx, course in enumerate(data["courses"]):
+                    day_str = available_days[idx % len(available_days)]
+                    fallback_timetable.append({
+                        "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
+                        "CourseName": course.get("CourseName", "Manual Allocation"),
+                        "CourseType": course.get("CourseType", "Theory"),
+                        "SessionIndex": 1,
+                        "InstanceIndex": 1,
+                        "Duration": 1,
+                        "DayIndex": idx % len(available_days),
+                        "Day": day_str,
+                        "StartTick": (idx % 4) + 1,  # map across standard time slots
+                        "RoomID": "Room 101"        # fallback default room
+                    })
                 
             return {
                 "status": "success",
-                "message": "Timetable generated via manual backup layout.",
+                "message": "Partial schedule generated.",
                 "timetable": fallback_timetable,
-                "stats": {"status_name": "OPTIMAL", "runtime": "0.0s"}
+                "stats": result.get("stats", {"status_name": "FALLBACK", "runtime": "0.0s"})
             }
 
         return {

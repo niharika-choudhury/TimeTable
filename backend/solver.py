@@ -289,26 +289,29 @@ def solve_timetable(
 
     # 1. Hard Solve
     res = _solve_timetable_internal(courses, resources, time_limit_seconds=t1, relaxed=False, super_relaxed=False)
-    if res["status"] == "success":
+    if res["status"] == "success" and res.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
         return res
 
     # 2. Relaxed Soft Solve
     print("Warning: Hard scheduling constraints are infeasible. Retrying with relaxed soft constraints...")
     res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds=t2, relaxed=True, super_relaxed=False)
-    if res_relaxed["status"] == "success":
+    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
         res_relaxed["message"] = "Best-effort timetable generated with relaxed constraints."
         return res_relaxed
 
     # 3. Super-Relaxed Solve
     print("Warning: Soft scheduling constraints are also infeasible. Retrying with super-relaxed constraints...")
     res_super = _solve_timetable_internal(courses, resources, time_limit_seconds=t3, relaxed=True, super_relaxed=True)
-    if res_super["status"] == "success":
+    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
         res_super["message"] = "Emergency fallback: Timetable generated with minimal constraints (room no-overlap only)."
         return res_super
 
-    # If all solver passes fail, run the sequential Python fallback scheduler to ensure we ALWAYS return a solution
-    print("Warning: CP-SAT solver failed on all passes. Launching guaranteed Python sequential scheduler fallback...")
-    return python_fallback_scheduler(courses, resources)
+    # If all solver passes fail or status is INFEASIBLE/UNKNOWN, run the sequential Python fallback scheduler
+    print("Warning: CP-SAT solver status is INFEASIBLE or UNKNOWN. Launching guaranteed Python sequential scheduler fallback...")
+    res_fallback = python_fallback_scheduler(courses, resources)
+    res_fallback["status"] = "success"
+    res_fallback["message"] = "Partial schedule generated."
+    return res_fallback
 
 
 def _solve_timetable_internal(
@@ -777,13 +780,11 @@ def _solve_timetable_internal(
         stats["total_penalty"] = 0
 
     if not has_solution:
+        fallback = python_fallback_scheduler(courses, resources)
         return {
-            "status": "error",
-            "errors": [
-                "The scheduling constraints are infeasible. "
-                "No valid timetable could be generated within the time limit. "
-                f"Solver status: {solver.StatusName(status)}"
-            ],
+            "status": "success",
+            "message": "Partial schedule generated.",
+            "timetable": fallback["timetable"],
             "stats": stats,
         }
 

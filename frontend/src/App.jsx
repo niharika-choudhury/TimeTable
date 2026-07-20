@@ -365,17 +365,23 @@ function App() {
       const result = await res.json()
       const hasTimetable = result.timetable && Array.isArray(result.timetable) && result.timetable.length > 0
 
-      if (res.ok && (result.status === 'success' || result.status === 'error' || hasTimetable)) {
-        // Clear any previous hard blocks right away
-        setError(null);
+      if (res.ok) {
+        // Clear any previous error state immediately when response is ok
+        setError(null)
 
-        if (result.status === 'error') {
-          // Treat it as a warning/info toast instead of a breaking error state
-          setSuccessMessage(result.message || (result.errors ? result.errors.join('\n') : 'Timetable generated with fallback constraints.'));
-          showToast('Timetable loaded with fallback constraints.', 'info');
+        const isFallbackOrPartial = !hasTimetable || 
+          result.timetable.length === 0 || 
+          (result.message && (result.message.includes('Partial') || result.message.includes('fallback') || result.message.includes('backup'))) ||
+          (result.stats && (result.stats.status_name === 'PYTHON_FALLBACK' || result.stats.status_name === 'UNKNOWN' || result.stats.status_name === 'INFEASIBLE' || result.stats.status_name === 'FALLBACK'))
+
+        if (isFallbackOrPartial) {
+          const infoMsg = result.message || 'Partial schedule generated.'
+          setSuccessMessage(infoMsg)
+          showToast(infoMsg, 'info')
         } else {
-          setSuccessMessage(result.message || 'Auto-Schedule compiled successfully!');
-          showToast('Auto-Schedule compiled successfully!', 'success');
+          const succMsg = result.message || 'Auto-Schedule compiled successfully!'
+          setSuccessMessage(succMsg)
+          showToast(succMsg, 'success')
         }
 
         if (hasTimetable) {
@@ -403,13 +409,10 @@ function App() {
           setUnassignedCourses([])
           setStats(result.stats)
           setGridKey((prev) => prev + 1) // Force visual refresh of the grid
-        } else {
-          setError(result.errors ? result.errors.join('\n') : 'Scheduling failed.')
-          showToast('Scheduling failed. Check logs.', 'error')
         }
       } else {
-        setError(result.errors ? result.errors.join('\n') : 'Scheduling failed.')
-        showToast('Scheduling failed. Check logs.', 'error')
+        setError(result.errors ? result.errors.join('\n') : (result.detail || 'Scheduling failed.'))
+        showToast(result.detail || 'Scheduling failed. Check logs.', 'error')
       }
     } catch (err) {
       setError('Connection error. Is the backend server running?')
