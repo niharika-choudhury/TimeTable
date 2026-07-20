@@ -753,11 +753,12 @@ def _solve_timetable_internal(
     # ----------------------------------------------------------------
     print(f"Solver model scale: {len(model.Proto().variables)} variables, {len(model.Proto().constraints)} constraints.")
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = time_limit_seconds
+    solver.parameters.max_time_in_seconds = 10.0
     solver.parameters.num_workers = 8
-    solver.parameters.log_search_progress = False
+    solver.parameters.log_search_progress = True
 
     status = solver.Solve(model)
+    print(f"[CP-SAT DIAGNOSTIC] Status: {solver.StatusName(status)} | Relaxed={relaxed} SuperRelaxed={super_relaxed} | Courses: {len(courses)} | Instances: {len(instances)} | Rooms: {len(all_rooms)} | Timeslots: {NUM_DAYS * TICKS_PER_DAY} | Teacher Assignments/Sessions: {sum(i['freq'] for i in instances)}")
 
     stats = {
         "status_name": solver.StatusName(status),
