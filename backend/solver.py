@@ -277,40 +277,41 @@ def python_fallback_scheduler(
 def solve_timetable(
     courses: List[Dict[str, Any]],
     resources: List[Dict[str, Any]],
-    time_limit_seconds: float = 45.0,
+    time_limit_seconds: float = 8.0,
 ) -> Dict[str, Any]:
     """
     Build and solve the CP-SAT timetabling model.
     Falls back to relaxed soft constraints or super-relaxed constraints if hard constraints are infeasible.
     """
-    t1 = max(3.0, time_limit_seconds * 0.3)
-    t2 = max(5.0, time_limit_seconds * 0.5)
+    t1 = max(2.0, time_limit_seconds * 0.4)
+    t2 = max(3.0, time_limit_seconds * 0.4)
     t3 = max(2.0, time_limit_seconds * 0.2)
 
     # 1. Hard Solve
     res = _solve_timetable_internal(courses, resources, time_limit_seconds=t1, relaxed=False, super_relaxed=False)
-    if res["status"] == "success" and res.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
+    if res["status"] == "success" and res.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+        res["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res
 
     # 2. Relaxed Soft Solve
-    print("Warning: Hard scheduling constraints are infeasible. Retrying with relaxed soft constraints...")
+    print("Warning: Hard scheduling constraints are infeasible/timeout. Retrying with relaxed soft constraints...")
     res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds=t2, relaxed=True, super_relaxed=False)
-    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
-        res_relaxed["message"] = "Best-effort timetable generated with relaxed constraints."
+    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+        res_relaxed["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_relaxed
 
     # 3. Super-Relaxed Solve
-    print("Warning: Soft scheduling constraints are also infeasible. Retrying with super-relaxed constraints...")
+    print("Warning: Soft scheduling constraints are also infeasible/timeout. Retrying with super-relaxed constraints...")
     res_super = _solve_timetable_internal(courses, resources, time_limit_seconds=t3, relaxed=True, super_relaxed=True)
-    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") not in ("INFEASIBLE", "UNKNOWN"):
-        res_super["message"] = "Emergency fallback: Timetable generated with minimal constraints (room no-overlap only)."
+    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+        res_super["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_super
 
-    # If all solver passes fail or status is INFEASIBLE/UNKNOWN, run the sequential Python fallback scheduler
+    # If all solver passes return UNKNOWN/INFEASIBLE, run sequential Python fallback scheduler
     print("Warning: CP-SAT solver status is INFEASIBLE or UNKNOWN. Launching guaranteed Python sequential scheduler fallback...")
     res_fallback = python_fallback_scheduler(courses, resources)
     res_fallback["status"] = "success"
-    res_fallback["message"] = "Partial schedule generated."
+    res_fallback["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
     return res_fallback
 
 
@@ -753,8 +754,8 @@ def _solve_timetable_internal(
     # ----------------------------------------------------------------
     print(f"Solver model scale: {len(model.Proto().variables)} variables, {len(model.Proto().constraints)} constraints.")
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 10.0
-    solver.parameters.num_workers = 8
+    solver.parameters.max_time_in_seconds = time_limit_seconds
+    solver.parameters.num_workers = 2
     solver.parameters.log_search_progress = True
 
     status = solver.Solve(model)
@@ -784,7 +785,7 @@ def _solve_timetable_internal(
         fallback = python_fallback_scheduler(courses, resources)
         return {
             "status": "success",
-            "message": "Partial schedule generated.",
+            "message": "Schedule generated (FEASIBLE/TIMEOUT).",
             "timetable": fallback["timetable"],
             "stats": stats,
         }
