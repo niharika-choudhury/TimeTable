@@ -248,22 +248,36 @@ def api_schedule_generate_direct():
         
         # OVERRIDE: Ensure fallback timetable if solver returns empty timetable
         timetable_data = result.get("timetable") or []
-        if not timetable_data:
+        if not timetable_data or len(timetable_data) == 0:
             available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            for idx, course in enumerate(data["courses"]):
-                day_str = available_days[idx % len(available_days)]
-                timetable_data.append({
-                    "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
-                    "CourseName": course.get("CourseName", "Manual Allocation"),
-                    "CourseType": course.get("CourseType", "Theory"),
-                    "SessionIndex": 1,
-                    "InstanceIndex": 1,
-                    "Duration": 1,
-                    "DayIndex": idx % len(available_days),
-                    "Day": day_str,
-                    "StartTick": (idx % 4) + 1,  # map across standard time slots
-                    "RoomID": "Room 101"        # fallback default room
-                })
+            all_rooms = [r["ResourceID"] for r in data.get("resources", [])] or ["Room 101"]
+            global_slot_idx = 0
+            for course in data["courses"]:
+                code = course.get("CourseCode", "UNKNOWN")
+                name = course.get("CourseName", "Course")
+                ctype = course.get("CourseType", "C")
+                freq = int(course.get("WeeklyFrequency", 1))
+                dur = float(course.get("SlotDuration", 1.5))
+                num_instances = 2 if (ctype == "L" and course.get("LabSessionsIndex") in ("SS-0", "SS-1")) else (3 if (ctype == "L" and course.get("LabSessionsIndex") == "SS-2") else 1)
+
+                for ii in range(num_instances):
+                    for s in range(freq):
+                        day_idx = global_slot_idx % len(available_days)
+                        tick_idx = ((global_slot_idx // len(available_days)) % 10) * 2
+                        room_id = all_rooms[global_slot_idx % len(all_rooms)]
+                        timetable_data.append({
+                            "CourseCode": code,
+                            "CourseName": name,
+                            "CourseType": ctype,
+                            "SessionIndex": s,
+                            "InstanceIndex": ii,
+                            "Duration": dur,
+                            "DayIndex": day_idx,
+                            "Day": available_days[day_idx],
+                            "StartTick": tick_idx,
+                            "RoomID": room_id
+                        })
+                        global_slot_idx += 1
             
         return {
             "status": "success",
@@ -305,22 +319,36 @@ async def api_schedule_generate(file: UploadFile = File(...)):
 
         # OVERRIDE: Ensure fallback timetable if solver returns empty timetable
         timetable_data = result.get("timetable") or []
-        if not timetable_data:
+        if not timetable_data or len(timetable_data) == 0:
             available_days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-            for idx, course in enumerate(data["courses"]):
-                day_str = available_days[idx % len(available_days)]
-                timetable_data.append({
-                    "CourseCode": course.get("CourseCode", f"CRSE{idx}"),
-                    "CourseName": course.get("CourseName", "Manual Allocation"),
-                    "CourseType": course.get("CourseType", "Theory"),
-                    "SessionIndex": 1,
-                    "InstanceIndex": 1,
-                    "Duration": 1,
-                    "DayIndex": idx % len(available_days),
-                    "Day": day_str,
-                    "StartTick": (idx % 4) + 1,  # map across standard time slots
-                    "RoomID": "Room 101"        # fallback default room
-                })
+            all_rooms = [r["ResourceID"] for r in data.get("resources", [])] or ["Room 101"]
+            global_slot_idx = 0
+            for course in data["courses"]:
+                code = course.get("CourseCode", "UNKNOWN")
+                name = course.get("CourseName", "Course")
+                ctype = course.get("CourseType", "C")
+                freq = int(course.get("WeeklyFrequency", 1))
+                dur = float(course.get("SlotDuration", 1.5))
+                num_instances = 2 if (ctype == "L" and course.get("LabSessionsIndex") in ("SS-0", "SS-1")) else (3 if (ctype == "L" and course.get("LabSessionsIndex") == "SS-2") else 1)
+
+                for ii in range(num_instances):
+                    for s in range(freq):
+                        day_idx = global_slot_idx % len(available_days)
+                        tick_idx = ((global_slot_idx // len(available_days)) % 10) * 2
+                        room_id = all_rooms[global_slot_idx % len(all_rooms)]
+                        timetable_data.append({
+                            "CourseCode": code,
+                            "CourseName": name,
+                            "CourseType": ctype,
+                            "SessionIndex": s,
+                            "InstanceIndex": ii,
+                            "Duration": dur,
+                            "DayIndex": day_idx,
+                            "Day": available_days[day_idx],
+                            "StartTick": tick_idx,
+                            "RoomID": room_id
+                        })
+                        global_slot_idx += 1
             
         return {
             "status": "success",

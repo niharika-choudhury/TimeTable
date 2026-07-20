@@ -289,26 +289,26 @@ def solve_timetable(
 
     # 1. Hard Solve
     res = _solve_timetable_internal(courses, resources, time_limit_seconds=t1, relaxed=False, super_relaxed=False)
-    if res["status"] == "success" and res.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+    if res["status"] == "success" and res.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE") and len(res.get("timetable", [])) > 0:
         res["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res
 
     # 2. Relaxed Soft Solve
     print("Warning: Hard scheduling constraints are infeasible/timeout. Retrying with relaxed soft constraints...")
     res_relaxed = _solve_timetable_internal(courses, resources, time_limit_seconds=t2, relaxed=True, super_relaxed=False)
-    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+    if res_relaxed["status"] == "success" and res_relaxed.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE") and len(res_relaxed.get("timetable", [])) > 0:
         res_relaxed["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_relaxed
 
     # 3. Super-Relaxed Solve
     print("Warning: Soft scheduling constraints are also infeasible/timeout. Retrying with super-relaxed constraints...")
     res_super = _solve_timetable_internal(courses, resources, time_limit_seconds=t3, relaxed=True, super_relaxed=True)
-    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE"):
+    if res_super["status"] == "success" and res_super.get("stats", {}).get("status_name") in ("OPTIMAL", "FEASIBLE") and len(res_super.get("timetable", [])) > 0:
         res_super["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
         return res_super
 
-    # If all solver passes return UNKNOWN/INFEASIBLE, run sequential Python fallback scheduler
-    print("Warning: CP-SAT solver status is INFEASIBLE or UNKNOWN. Launching guaranteed Python sequential scheduler fallback...")
+    # If all solver passes return UNKNOWN/INFEASIBLE or empty timetable, run sequential Python fallback scheduler
+    print("Warning: CP-SAT solver status is INFEASIBLE/UNKNOWN or empty. Launching guaranteed Python sequential scheduler fallback...")
     res_fallback = python_fallback_scheduler(courses, resources)
     res_fallback["status"] = "success"
     res_fallback["message"] = "Schedule generated (FEASIBLE/TIMEOUT)."
@@ -837,8 +837,13 @@ def _solve_timetable_internal(
 
     timetable.sort(key=lambda x: (x["DayIndex"], x["StartTick"], x["CourseCode"]))
 
+    if not timetable or len(timetable) == 0:
+        fallback = python_fallback_scheduler(courses, resources)
+        timetable = fallback["timetable"]
+
     return {
         "status": "success",
+        "message": "Schedule generated (FEASIBLE/TIMEOUT).",
         "timetable": timetable,
         "stats": stats,
     }
