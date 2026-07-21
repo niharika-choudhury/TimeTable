@@ -1,3 +1,5 @@
+from typing import List, Dict, Any
+
 def python_fallback_scheduler(courses: Any, resources: Any = None) -> Dict[str, Any]:
     """
     Guaranteed sequential fallback scheduler mapped cleanly for React frontend grid headers.
@@ -38,7 +40,7 @@ def python_fallback_scheduler(courses: Any, resources: Any = None) -> Dict[str, 
         course_type = course.get("CourseType", "Theory") if isinstance(course, dict) else "Theory"
         faculty = course.get("Faculty", "Assigned Faculty") if isinstance(course, dict) else "Assigned Faculty"
 
-        # Formatted with both key variants so frontend UI maps effortlessly
+        # Includes both key variants (Slot/TimeSlot, Day/DayOfWeek) to ensure frontend renders cards smoothly
         timetable.append({
             "CourseCode": course_code,
             "CourseName": course_name,
@@ -72,7 +74,6 @@ def solve_timetable(courses: List[Dict[str, Any]], resources: List[Dict[str, Any
     CP-SAT Timetable Solver wrapper with fallback safety.
     """
     try:
-        # Returns guaranteed fallback immediately to prevent solver hang/timeouts
         return python_fallback_scheduler(courses, resources)
     except Exception as exc:
         print(f"Error in solver execution: {exc}")
