@@ -1,9 +1,6 @@
-from typing import List, Dict, Any
-
 def python_fallback_scheduler(courses: Any, resources: Any = None) -> Dict[str, Any]:
     """
-    Guaranteed sequential fallback scheduler when CP-SAT solver times out or fails.
-    Handles both direct course lists and full data dictionaries safely.
+    Guaranteed sequential fallback scheduler mapped cleanly for React frontend grid headers.
     """
     if isinstance(courses, dict):
         data_dict = courses
@@ -14,7 +11,14 @@ def python_fallback_scheduler(courses: Any, resources: Any = None) -> Dict[str, 
         resources_list = resources if isinstance(resources, list) else []
 
     days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    slots = ["09:00 - 10:00", "10:00 - 11:00", "11:00 - 12:00", "14:00 - 15:00", "15:00 - 16:00"]
+    slots = [
+        "08:00 - 09:00",
+        "09:00 - 10:00",
+        "10:00 - 11:00",
+        "11:00 - 12:00",
+        "12:00 - 01:00",
+        "01:00 - 02:00"
+    ]
     
     rooms = []
     for r in (resources_list or []):
@@ -34,14 +38,18 @@ def python_fallback_scheduler(courses: Any, resources: Any = None) -> Dict[str, 
         course_type = course.get("CourseType", "Theory") if isinstance(course, dict) else "Theory"
         faculty = course.get("Faculty", "Assigned Faculty") if isinstance(course, dict) else "Assigned Faculty"
 
+        # Formatted with both key variants so frontend UI maps effortlessly
         timetable.append({
             "CourseCode": course_code,
             "CourseName": course_name,
             "CourseType": course_type,
             "Faculty": faculty,
             "Day": day,
+            "DayOfWeek": day,
             "Slot": slot,
-            "Room": room
+            "TimeSlot": slot,
+            "Room": room,
+            "Classroom": room
         })
 
     return {
