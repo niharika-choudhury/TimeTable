@@ -1,3 +1,35 @@
+def python_fallback_scheduler(courses, resources=None):
+    """
+    Guaranteed sequential fallback scheduler when CP-SAT solver times out or fails.
+    """
+    courses = courses if isinstance(courses, list) else []
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    slots = ["09:00 - 10:00", "10:00 - 11:00", "11:00 - 12:00", "14:00 - 15:00", "15:00 - 16:00"]
+    rooms = [r.get("RoomName", r.get("RoomCode", "Room 101")) for r in (resources or []) if isinstance(r, dict)]
+    if not rooms:
+        rooms = ["Room 101", "Room 102", "Lab 1"]
+
+    timetable = []
+    for idx, course in enumerate(courses):
+        day = days[idx % len(days)]
+        slot = slots[(idx // len(days)) % len(slots)]
+        room = rooms[idx % len(rooms)]
+
+        timetable.append({
+            "CourseCode": course.get("CourseCode", f"CRSE{idx+1}"),
+            "CourseName": course.get("CourseName", "Scheduled Course"),
+            "CourseType": course.get("CourseType", "Theory"),
+            "Faculty": course.get("Faculty", "Assigned Faculty"),
+            "Day": day,
+            "Slot": slot,
+            "Room": room
+        })
+
+    return {
+        "status": "success",
+        "timetable": timetable,
+        "message": "Generated using guaranteed sequential fallback."
+    }
 def generate_fallback_timetable(data: dict) -> List[Dict[str, Any]]:
     """
     Generate a fallback timetable given a data dict containing 'courses' and 'resources'.
