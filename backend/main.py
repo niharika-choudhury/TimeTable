@@ -225,7 +225,7 @@ def api_schedule_generate_direct():
         if not timetable_data:
             timetable_data = generate_fallback_timetable(data)
 
-      return {
+        return {
             "status": "success",
             "message": "Schedule generated successfully.",
             "timetable": timetable_data,
@@ -272,7 +272,7 @@ async def api_schedule_generate(file: UploadFile = File(...)):
         if not timetable_data:
             timetable_data = generate_fallback_timetable(data)
 
-      return {
+        return {
             "status": "success",
             "message": "Schedule generated successfully.",
             "timetable": timetable_data,
