@@ -40,7 +40,7 @@ def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = verify_access_token(token)
     if payload is None:
         raise credentials_exception
-    
+        
     email = payload.get("sub")
     if email is None:
         raise credentials_exception
@@ -242,16 +242,24 @@ def api_schedule_generate_direct():
             )
     try:
         data = parse_and_validate_excel(file_path)
+        
+        # Call solver with max 5.0 seconds limit
         try:
+            result = solve_timetable(data["courses"], data["resources"], max_time_in_seconds=5.0)
+        except TypeError:
+            # Fallback if solve_timetable doesn't accept max_time_in_seconds parameter
             result = solve_timetable(data["courses"], data["resources"])
         except Exception as se:
             print(f"Solver exception in generate-direct: {se}")
-            result = {"status": "success", "timetable": generate_fallback_timetable(data)}
-        
-        timetable_data = result.get("timetable") or []
-        if not timetable_data or len(timetable_data) == 0:
+            result = {}
+
+        # GUARANTEE: Check both status AND timetable array. If solver failed or returned empty/error, return fallback!
+        timetable_data = result.get("timetable")
+        is_success = result.get("status") == "success"
+
+        if not is_success or not timetable_data:
             timetable_data = generate_fallback_timetable(data)
-            
+
         return {
             "status": "success",
             "message": result.get("message", "Schedule generated successfully."),
@@ -276,7 +284,7 @@ async def api_schedule_generate(file: UploadFile = File(...)):
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
-        # 2. Parse & validate (ingestion layer — catches Rule 9, counts, etc.)
+        # 2. Parse & validate
         try:
             data = parse_and_validate_excel(file_path)
         except TimetableValidationError as ve:
@@ -288,15 +296,19 @@ async def api_schedule_generate(file: UploadFile = File(...)):
 
         # 3. Run CP-SAT solver with fallback guarantee
         try:
+            result = solve_timetable(data["courses"], data["resources"], max_time_in_seconds=5.0)
+        except TypeError:
             result = solve_timetable(data["courses"], data["resources"])
         except Exception as se:
             print(f"Solver exception in generate: {se}")
-            result = {"status": "success", "timetable": generate_fallback_timetable(data)}
+            result = {}
 
-        timetable_data = result.get("timetable") or []
-        if not timetable_data or len(timetable_data) == 0:
+        timetable_data = result.get("timetable")
+        is_success = result.get("status") == "success"
+
+        if not is_success or not timetable_data:
             timetable_data = generate_fallback_timetable(data)
-            
+
         return {
             "status": "success",
             "message": result.get("message", "Schedule generated successfully."),
